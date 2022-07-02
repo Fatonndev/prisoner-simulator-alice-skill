@@ -7,61 +7,70 @@ const { saveSession }           = require("../session");
 const smiles = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
 const smiles_t = ['1', '2', '3', '4', '5', '6'];
 
-module.exports.checkQuest = async (session, cmd, args) => {
+module.exports.checkQuest = async (session, cmd, args, condition = (s1, s2) => s1 === s2) => {
    const ind = smiles_t.indexOf(args[0]);
    if (ind !== -1) {
       cmd = cmd.substring(2);
    }
 
    for (let i = 0; i < session.last_quest.variants.length; i++) {
-      if (session.last_quest.variants[i].toLowerCase().replaceAll(/[.,!?]/gm, '') === cmd) {
-         const c = session.last_quest.consequences[i];
+      // Очищаем сообщение квеста от посторонних символов
+      const quest_parsed_message = session.last_quest.variants[i].toLowerCase().replaceAll(/[.,!?]/gm, '');
 
-         const random_num = Math.random() * 100;
+      // Не похоже на то, что мы ищем, гоним дальше
+      if (!condition(quest_parsed_message, cmd)) {
+         continue;
+      }
 
-         let chance = 0;
-         let result = null;
+      const c = session.last_quest.consequences[i];
+      const random_num = Math.random() * 100;
 
-         for (let j = 0; j < c.chance.length; j++) {
-            if (random_num >= chance) {
-               result = c.result[j];
-            } else {
-               break;
-            }
+      let chance = 0;
+      let result = null;
 
-            chance += c.chance[j];
+      for (let j = 0; j < c.chance.length; j++) {
+         if (random_num >= chance) {
+            result = c.result[j];
+         } else {
+            break;
          }
 
-         if (!result) {
-            return {
+         chance += c.chance[j];
+      }
+
+      if (!result) {
+         return {
+            error: {
                response: {
-                  text: ms.error.error_code,
+                  text: ms.error.error_code + 4008,
                   buttons: module.exports.generateQuestButtons(session),
                   end_session: false,
                }
             }
          }
+      }
 
-         let status_string = '';
+      let status_string = '';
 
-         if (result.action.status) {
-            session.game.status += result.action.status;
-            status_string += ms.status.status + (result.action.status > 0 ? ('+' + result.action.status) : result.action.status) + '\n'
-         }
+      if (result.action.status) {
+         session.game.status += result.action.status;
+         status_string += ms.status.status + (result.action.status > 0 ? ('+' + result.action.status) : result.action.status) + '\n'
+      }
 
-         if (result.action.room && result.action.room !== 'random') {
-            session.room = result.action.room;
-         } else {
-            session.room = module.exports.generateRandomRoom(session);
-         }
+      if (result.action.room && result.action.room !== 'random') {
+         session.room = result.action.room;
+      } else {
+         session.room = module.exports.generateRandomRoom(session);
+      }
 
-         // Делаем запрос на подтверждение при помощи кнопки Продолжить
-         session.last_quest = null;
+      // Делаем запрос на подтверждение при помощи кнопки Продолжить
+      session.last_quest = null;
 
-         await saveSession(session);
-         const command = selectRandomFromArray(ms.command_args.continue).join(' ');
+      await saveSession(session);
+      const command = selectRandomFromArray(ms.command_args.continue).join(' ');
 
-         return {
+      return {
+         out: {
             response: {
                text: result.message
                   + (status_string === '' ? '' : '\n\n' + status_string)
@@ -75,9 +84,11 @@ module.exports.checkQuest = async (session, cmd, args) => {
    }
 
    return {
-      response: {
-         text: 'Вы ввели неверную команду',
-         end_session: false,
+      error: {
+         response: {
+            text: 'Вы ввели неверную команду',
+            end_session: false,
+         }
       }
    }
 }
