@@ -2,7 +2,9 @@ const ms       = require('./messages');
 const commands = require('./commands/_index');
 
 const { getSession } = require("./session");
-const { checkQuest, generateNextQuestMessage, generateQuestButtons } = require("./game/game_logic");
+const { generateNextQuestMessage, generateQuestButtons } = require("./game/game_logic");
+const { levenshtein_percent } = require("./utils/levenshtein");
+const { check_commands, check_quests, check_similar_commands, check_similar_quests} = require("./utils/command");
 
 /*
 https://www.youtube.com/watch?v=He0-YyciQPU
@@ -17,6 +19,7 @@ https://www.youtube.com/watch?v=OqRuqcZy-xw
 Спереть что то более чем спирт
 */
 
+// Главный хандлер для Yandex Cloud
 module.exports.handler = async (event, context) => {
    const { version, session, request } = event;
 
@@ -25,7 +28,9 @@ module.exports.handler = async (event, context) => {
    const user_session = await getSession(session["session_id"], session["user_id"]);
    const args = cmd.split(' ');
 
+   // Если это первое сообщение
    if (cmd.length === 0) {
+      // Продолжаем квест если возможно
       if (user_session.last_quest != null) {
          return {
             version, session,
@@ -47,74 +52,52 @@ module.exports.handler = async (event, context) => {
       };
    }
 
-   // Clear empty arguments
-   for (let i = 0; i < args.length; i++) {
-      if (args[0] === '') {
-         args.splice(i, 1);
-         i--;
-      }
-   }
+   // Используем, если нам нужно сначала проверить другие результаты, если их нет, пишем эту ошибку
+   let custom_error;
 
-   // Search for commands
-   for (const c of commands) {
-      if (!c.info.categories.includes('any') && !c.info.categories.includes(user_session.state)) {
-         continue;
-      }
-
-      for (const alias of c.info.aliases) {
-         let ok = true;
-
-         if (alias.length < args.length) {
-            continue;
-         }
-
-         for (let i = 0; i < alias.length; i++) {
-            if (typeof alias[i] === 'object') {
-               if (alias[i].required) {
-                  if (args.length < i + 1) {
-                     ok = false;
-                     break;
-                  }
-
-                  continue;
-               } else {
-                  console.error('WARNING: alias[i].required is false! This function is not implemented')
-                  continue;
-               }
-            }
-
-            if (alias[i] !== args[i]) {
-               ok = false;
-               break;
-            }
-         }
-
-         if (ok) {
-            const out = await c.handle(user_session, args);
-
-            const result = {
-               version, session,
-               ...out
-            }
-
-            result.response.buttons = generateQuestButtons(user_session);
-
-            return result;
-         }
-      }
-   }
-
-   if (user_session.last_quest != null) {
-      const result = {
-         version, session,
-         ...await checkQuest(user_session, cmd, args)
-      }
-
-      result.response.buttons = generateQuestButtons(user_session);
-
+   // Ищем возможные команды
+   let result = await check_commands(args, user_session, version, session);
+   if (result) {
       return result;
    }
 
+   // Если сейчас пользователь проходит квест, проверяем ответ к квесту
+   result = await check_quests(cmd, args, user_session, version, session);
+
+   if (result) {
+      if (result.out) {
+         return result.out;
+      }
+      else if (result.error) {
+         custom_error = result.error;
+      }
+   }
+
+   // Ищем возможные команды по левенштеину
+   result = await check_similar_commands(args, user_session, version, session);
+   if (result) {
+      return result;
+   }
+
+   // Ищем возможные квесты по левенштеину
+   result = await check_similar_quests(cmd, args, user_session, version, session);
+
+   if (result) {
+      if (result.out) {
+         return result.out;
+      }
+      else if (result.error) {
+         custom_error = result.error;
+      }
+   }
+
+   // Если ошибка в очереди, пишем её
+   if (custom_error) {
+      return custom_error;
+   }
+
+   // Если ничего не подходит, говорим что не понял команду
+   // TODO: рандомизация результата
    return {
       version, session,
       response: {
